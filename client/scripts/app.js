@@ -1,180 +1,146 @@
-// YOUR CODE HERE:
-var Chatterbox = function() {
- // private data
-  var timer          = null;
 
-  // parameters
-  this._username      = window.location.search.slice( window.location.search.search('=')+1 );
-  this._roomsList     = [];
-  this._roomJoined    = [];
-  this._onlineUsers   = [];
-  this._followList   = [];
-  this._messageList   = new MessageList(50);
+// placing in app object
+var app = {
 
-  // public data
-  // this._chatterboxUrl = "https://api.parse.com/1/classes/chatterbox";
-  this._chatterboxUrl = "http://localhost:8080";
+  // Initial Variables
+  server: 'https://api.parse.com/1/classes/chatterbox',
+  username: 'anonymous',
+  roomname: 'lobby',
+  friends: [],
+  lastCreatedAt: '',
+  friendLength: 0,
 
-  // displays
-  // this._chatDisplay = Handlebars.compile( $('#chats').html() );
-  // this._usersDisplay=Handlebars.compile( $('#users').html() );
+  init: function() {
+    app.username = window.location.search.substr(10);
+    app.getNewMessages();
+    // Event Handlers
+    $('.postMessage').on('click', function() {
+      app.postMessage();
+    });
+    $('#roomSelect').on('change', function() {
+      app.changeRoom();
+    });
+  },
 
-  // Class methods
-  Chatterbox.start = function(func, context) {
-    timer = setInterval(_.bind(func, context), 2000);
-  };
+  getNewMessages: function() {
+    app.getMessages();
+    setTimeout(app.getNewMessages, 5000);
+  },
 
-  Chatterbox.stop = function() {
-    clearInterval( timer );
-  };
+  getMessages: function() {
+    $.ajax({
+      url: app.server,
+      data: 'order=-createdAt',
+      contentType: 'application/json',
+      success: function(data) {
 
-};
+        // To prevent unneeded updates
+        if (!data) return;
+        if (app.lastCreatedAt && data.results[data.results.length-1].createdAt === app.lastCreatedAt){
+          if (app.friends.length === app.friendsLength)
+            return;
+          else 
+            app.friendsLength = app.friends.length;          
+        }
+        else 
+          app.lastCreatedAt = data.results[data.results.length-1].createdAt;
 
-// private methods
-Chatterbox.prototype._transmit = function(message) {
-  return $.ajax({
-    url: this._chatterboxUrl,
-    type: 'POST',
-    data: message.json(),
-    contentType: 'application/json'
-  });
-};
+        app.getRooms(data.results);
+        app.displayMessages(data);
+        // console.log('updating');
+      },
+      error: function(data) {
+        console.log('chatterbox: Failed to get messages');
+      }
+    });
+  },
 
-Chatterbox.prototype._transmitError = function(xhr, ajaxOptions, thrownError) {
-  console.error('Message transmission failed!');
-};
+  displayMessages: function(data) {
+    app.clearMessages();
+    _.each(data.results, function(item, index) {
+      if (item['roomname'] === app.roomname || app.roomname === 'lobby') {
+        var $message = $('<li></li>').addClass('message');
+        var $user = $('<div></div>').addClass('username').text(item['username']);
+        var $text = $('<div></div>').addClass('text').text(item['text']);
+        if (app.friends.indexOf(item['username']) > -1) $text.addClass('friend');
+        $message.append($user).append($text);
+        $('#chats').append($message);
+      }
+    });
+    $('.username').on('click', function() {
+     app.addFriend($(this).text());
+    });
+  },
 
-Chatterbox.prototype._transmitSuccess = function(response) {
-  console.log("Message transmitted successfully: ", response);
-  this.fetchMessages();
-};
+  clearMessages: function() {
+    $('.message').remove();
+  },
 
-Chatterbox.prototype._receiveError = function(jqXhr, status) {
-  // if (jqXhr) {
-    console.error('Error while receiving messages: ', jqXhr.statusText, 'code: ', jqXhr.status );
-  // }
-};
+  postMessage: function() {
 
-Chatterbox.prototype._fetch = function(objectId) {
-  var url = this._chatterboxUrl + (objectId ? '/' + objectId : '');
-  url = url; //+ '?order=-createdAt';
-  console.log('fetch url ', url);
-  return $.ajax({
-    url: url,
-    type: 'GET',
-    limit: 500,
-    contentType: 'application/json'
-  });
-};
+    var message = {
+      username: app.username,
+      text: $('[name=newMessage').val(),
+      roomname: app.roomname || 'lobby'
+    }
 
-Chatterbox.prototype._parseReceiveMessage = function(data, ajaxOptions, thrownError) {
-  if (data.hasOwnProperty('results')) {
-    this._messageList.addMessages( data.results );
-  } else {
-    this._messageList.addMessages( [data] );
-  }
+    $.ajax({
+      url: app.server,
+      type: 'POST',
+      data: JSON.stringify(message),
+      contentType: 'application/json',
+      success: function(data) {
+        app.getMessages();
+        $('[name=newMessage').val('');
+      },
+      error: function(data) {
+        console.error('chatterbox: Failed to post message');
+      }
+    });
+  },
 
-  //this._updateUserList();
-  this._updateList(this._onlineUsers, 'username');
-  this._updateList(this._roomsList, 'roomname');
+  getRooms: function(results) {
+    $('#roomSelect').html('<option value="__newRoom">New room...</option><option value="" selected>Lobby</option></select>');
 
-  if (typeof this._view === 'object') {
-    this._view.dataEvent();
-  }
-  console.log('Got new list of messages');
-};
+    if (results) {
+      var rooms = [];
+      results.forEach(function(data){
+        var roomname = data.roomname;
+        if (roomname && rooms.indexOf(roomname) === -1) {
+          app.addRoom(roomname);
+          rooms.push(roomname);
+        }
+      });
+    }
+    $('#roomSelect').val(app.roomname);
+  },
 
-// public API
-Chatterbox.prototype.sendMessage = function(message) {
-  var that = this;
-  message = {
-    text: message,
-    username: this._username,
-    roomname: null
-  };
-  this
-  ._transmit(new Message(message))
-  .done(function() { that._transmitSuccess(); } )
-  .fail(function() { that._transmitError(); } )
-  .always(function() {
-    console.log('Message transmission complete');
-  });
-};
+  changeRoom: function() {
+    if ($('#roomSelect').prop('selectedIndex') === 0) {
+      var roomname = prompt('Enter roomname');
+      if (roomname) {
+        app.roomname = roomname;
+        app.addRoom(roomname);
+        $('#roomSelect').val(roomname);
+        app.getMessages();
+      }
+    }
+    else {
+      app.roomname = $('#roomSelect').val();
+      app.getMessages();
+    }
+  }, 
 
-Chatterbox.prototype.fetchMessages = function(objectId) {
-  var that = this;
-  this
-  ._fetch(objectId)
-  .done( _.bind( this._parseReceiveMessage, this)  )
-  .fail( _.bind( this._receiveError, this) )
-  .always( function() {
-    console.log('fetchMessages ajax call done');
-  });
-};
+  addRoom: function(roomname) {
+    var $roomOption = $('<option/>').val(roomname).text(roomname);
+    $('#roomSelect').append($roomOption);
+  },
 
-Chatterbox.prototype.getRoomMessages = function() {
-  return this._messageList.filter( {rooms: this._roomJoined} );
-};
-
-Chatterbox.prototype.createRoom = function(roomname) {
-
-};
-
-Chatterbox.prototype.updateRoom = function(roomname) {
-  if (this._roomJoined.indexOf(roomname) > -1) {
-    this._roomJoined = _.without( this._roomJoined, roomname);
-  } else {
-    this._roomJoined.push( roomname );
-  }
-  console.log( this._roomJoined);
-};
-
-Chatterbox.prototype.updateFollowList = function(username) {
-  if (this._followList.indexOf(username) > -1) {
-    this._followList = _.without( this._followList, username);
-  } else {
-    this._followList.push( username );
-  }
-  console.log( this._followList );
-};
-
-Chatterbox.prototype.removeFromFollowList = function(username) {
-
-};
-
-Chatterbox.prototype._updateUserList = function() {
-  var onlineUser = {};
-  var notInList = function(user) {
-    return user.username !== onlineUser.username; 
-  };
-  var userList = this._onlineUsers;
-  for(var i=0; i < this._messageList._messages.length; i++) {
-    onlineUser.username = this._messageList._messages[i].username;
-    if (_.every(userList, notInList)) {
-      this._onlineUsers.push({'username' : onlineUser.username});
+  addFriend: function(friend) {
+    if (app.friends.indexOf(friend) === -1) {
+      app.friends.push(friend);
+      app.getMessages();
     }
   }
-};
 
-Chatterbox.prototype._updateList = function(list, itemName) {
-  var currentItem, dummyObj ;
-  var notInList = function(item) {
-    return item[itemName] !== currentItem; 
-  };
-  for(var i=0; i < this._messageList._messages.length; i++) {
-    currentItem = this._messageList._messages[i][itemName];
-    if (_.every(list, notInList)) {
-      dummyObj ={};
-      dummyObj[itemName] = currentItem;
-      list.push(dummyObj);
-    }
-  }
 };
-
-Chatterbox.prototype._updateRoomsList  = function() {
-  var rooms = {};
-};
-
-var chatterbox = new Chatterbox();
-var chatterView = new ChatterView( chatterbox );
-Chatterbox.start( chatterbox.fetchMessages, chatterbox );

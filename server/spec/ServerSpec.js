@@ -1,104 +1,120 @@
-var handler = require("../request-handler");
-console.log('HANDLER: ', handler);
-function StubRequest(url, method, postdata) {
-  this.url = url;
-  this.method = method;
-  this._postData = postdata;
-  this.setEncoding = function(type) {
-    //ignore
-  };
-  var self = this;
-  this.addListener = this.on = function(type, callback) {
-    if (type == "data") {
-      callback(JSON.stringify(self._postData));
-    }
-    if (type == "end") {
-      callback();
-    }
-  };
+var handler = require('../request-handler');
+var expect = require('../../node_modules/chai/chai').expect;
+var basicServer = require('../basic-server').server;
+var stubs = require('./Stubs');
+
+// Conditional async testing, akin to Jasmine's waitsFor()
+// Will wait for test to be truthy before executing callback
+function waitForThen(test, cb) {
+  setTimeout(function() {
+    test() ? cb.apply(this) : waitForThen(test, cb);
+  }, 5);
 }
 
-function StubResponse() {
-  this._ended = false;
-  this._responseCode = null;
-  this._headers = null;
-  this._data = null;
-  var self = this;
-  this.writeHead = function(responseCode, headers) {
-    console.log("WriteHead called with " + responseCode);
-    self._responseCode = responseCode;
-    self._headers = headers;
-  };
-  this.end = function(data) {
-    console.log("Response.end called.");
-    self._ended = true;
-    self._data = data;
-  };
-}
+describe('Node Server Request Listener Function', function() {
+  it('Should answer GET requests for /classes/room with a 200 status code', function() {
+    // This is a fake server request. Normally, the server would provide this,
+    // but we want to test our function's behavior totally independent of the server code
+    var req = new stubs.request('/classes/room1', 'GET');
+    var res = new stubs.response();
 
-describe("Node Server Request Listener Function", function() {
- it("Should answer GET requests for /classes/room", function() {
-   var req = new StubRequest("http://127.0.0.1:8080/classes/room1",
-                             "GET");
-   var res = new StubResponse();
+    handler.handler(req, res);
 
-   handler.handleRequest(req, res);
+    expect(res._responseCode).to.equal(200);
+    expect(res._ended).to.equal(true);
+  });
 
-   expect(res._responseCode).toEqual(200);
-   expect(res._data).toEqual("[]");
-   expect(res._ended).toEqual(true);
- });
+  it('Should send back parsable stringified JSON', function() {
+    var req = new stubs.request('/classes/room1', 'GET');
+    var res = new stubs.response();
 
- it("Should accept posts to /classes/room", function() {
-   var req = new StubRequest("http://127.0.0.1:8080/classes/room1",
-                             "POST",
-                            {username: "Jono",
-                             message: "Do my bidding!"});
-   var res = new StubResponse();
+    handler.handler(req, res);
 
-   handler.handleRequest(req, res);
+    expect(JSON.parse.bind(this, res._data)).to.not.throw();
+    expect(res._ended).to.equal(true);
+  });
 
-   // Expect 201 Created response status
-   expect(res._responseCode).toEqual(201);
+  it('Should send back an object', function() {
+    var req = new stubs.request('/classes/room1', 'GET');
+    var res = new stubs.response();
 
-   // Testing for a newline isn't a valid test
-   // TODO: Replace with with a valid test
-   // expect(res._data).toEqual(JSON.stringify("\n"));
-   expect(res._ended).toEqual(true);
+    handler.handler(req, res);
 
-   // Now if we request the log for that room,
-   // the message we posted should be there:
-   req = new StubRequest("http://127.0.0.1:8080/classes/room1",
-                             "GET");
-   res = new StubResponse();
+    var parsedBody = JSON.parse(res._data);
+    expect(parsedBody).to.be.an('object');
+    expect(res._ended).to.equal(true);
+  });
 
-   handler.handleRequest(req, res);
+  it('Should send an object containing a `results` array', function() {
+    var req = new stubs.request('/classes/room1', 'GET');
+    var res = new stubs.response();
 
-   expect(res._responseCode).toEqual(200);
-   var messageLog = JSON.parse(res._data);
-   expect(messageLog.length).toEqual(1);
-   expect(messageLog[0].username).toEqual("Jono");
-   expect(messageLog[0].message).toEqual("Do my bidding!");
-   expect(res._ended).toEqual(true);
- });
+    handler.handler(req, res);
+
+    var parsedBody = JSON.parse(res._data);
+    expect(parsedBody).to.have.property('results');
+    expect(parsedBody.results).to.be.an('array');
+    expect(res._ended).to.equal(true);
+  });
+
+  it('Should accept posts to /classes/room', function() {
+    var stubMsg = {
+      username: 'Jono',
+      message: 'Do my bidding!'
+    };
+    var req = new stubs.request('/classes/room1', 'POST', stubMsg);
+    var res = new stubs.response();
+
+    handler.handler(req, res);
+
+    // Expect 201 Created response status
+    expect(res._responseCode).to.equal(201);
+
+    // Testing for a newline isn't a valid test
+    // TODO: Replace with with a valid test
+    // expect(res._data).to.equal(JSON.stringify('\n'));
+    expect(res._ended).to.equal(true);
+  });
+
+it('Should respond with messages that were previously posted', function() {
+    var stubMsg = {
+      username: 'Jono',
+      message: 'Do my bidding!'
+    };
+    var req = new stubs.request('/classes/room1', 'POST', stubMsg);
+    var res = new stubs.response();
+
+    handler.handler(req, res);
+
+    expect(res._responseCode).to.equal(201);
+
+    // Now if we request the log for that room the message we posted should be there:
+    req = new stubs.request('/classes/room1', 'GET');
+    res = new stubs.response();
+
+    handler.handler(req, res);
+
+    expect(res._responseCode).to.equal(200);
+    var messages = JSON.parse(res._data).results;
+    expect(messages.length).to.be.above(0);
+    expect(messages[0].username).to.equal('Jono');
+    expect(messages[0].message).to.equal('Do my bidding!');
+    expect(res._ended).to.equal(true);
+  });
 
 
- xit("Should 404 when asked for a nonexistent file", function() {
-   var req = new StubRequest("http://127.0.0.1:8080/arglebargle",
-                             "GET");
-   var res = new StubResponse();
+  it('Should 404 when asked for a nonexistent file', function() {
+    var req = new stubs.request('/arglebargle', 'GET');
+    var res = new stubs.response();
 
-   handler.handleRequest(req, res);
-   console.log("Res is " + res);
+    handler.handler(req, res);
 
-   // Wait some time before checking results:
-   waits(1000);
-
-   runs(function() {
-     expect(res._responseCode).toEqual(404);
-     expect(res._ended).toEqual(true);
-   });
- });
-
+    // Wait for response to return and then check status code
+    waitForThen(
+      function() { return res._ended; },
+      function() {
+        expect(res._responseCode).to.equal(404);
+    });
+  });
 
 });
